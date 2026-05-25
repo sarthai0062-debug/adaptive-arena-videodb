@@ -1067,3 +1067,8 @@ html, body {
   height: 100%;
   border: none;
 }
+
+/* Global Utility Classes */
+.hidden {
+  display: none !important;
+}
