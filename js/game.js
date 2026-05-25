@@ -762,7 +762,8 @@ const Game = (() => {
                 iframe.src = res.player_url;
                 playerBox.classList.remove('hidden');
             } else {
-                alert(res && res.error ? `Stitching failed: ${res.error}` : "Highlights stitching failed. Ensure VideoDB Sandbox is online.");
+                const msg = res && res.error ? res.error : "Highlights stitching failed. Ensure VideoDB Sandbox is online.";
+                alert(msg.startsWith('Stitching failed') ? msg : `Stitching failed: ${msg}`);
                 btn.classList.remove('hidden');
             }
         } catch (err) {

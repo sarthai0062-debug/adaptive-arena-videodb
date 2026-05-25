@@ -177,6 +177,7 @@ def _resolve_generation_job(job_id: str, result_type: str) -> dict:
 # Zone content for on-demand trailer asset generation (VideoDB sandbox guide pattern)
 ZONE_CONTENT = {
     "forest": {
+        "title": "Enchanted Forest",
         "prompt": (
             "A mystical enchanted forest at twilight with glowing mushrooms, fireflies, "
             "ancient trees with luminous vines, fantasy game art, panoramic wide landscape, vibrant colors"
@@ -184,6 +185,7 @@ ZONE_CONTENT = {
         "narration": "You enter the Enchanted Forest. Ancient trees whisper of forgotten battles.",
     },
     "cave": {
+        "title": "Crystal Cave",
         "prompt": (
             "A vast crystal cave with bioluminescent crystals, underground lake reflections, "
             "purple and blue glowing formations, fantasy game art, panoramic wide landscape"
@@ -191,6 +193,7 @@ ZONE_CONTENT = {
         "narration": "Darkness engulfs you as you descend into the Crystal Caves. Shadow bats circle overhead.",
     },
     "volcano": {
+        "title": "Volcano Depths",
         "prompt": (
             "An erupting volcano landscape with rivers of flowing lava, dark red sky, obsidian rocks, "
             "fire embers floating, dramatic fantasy game art, panoramic wide landscape"
@@ -198,6 +201,7 @@ ZONE_CONTENT = {
         "narration": "The ground shakes beneath your feet. Welcome to the Volcanic Depths, warrior.",
     },
     "sky": {
+        "title": "Sky Castle",
         "prompt": (
             "A floating castle in the sky above clouds at golden hour, majestic towers, birds flying, "
             "rainbow light rays, fantasy game art, panoramic wide landscape"
@@ -205,6 +209,7 @@ ZONE_CONTENT = {
         "narration": "You ascend to the Sky Castle. Wind howls through floating ruins.",
     },
     "space": {
+        "title": "Deep Space",
         "prompt": (
             "A colorful deep space nebula with distant galaxies, alien planet surfaces, cosmic dust clouds, "
             "neon colors, sci-fi game art, panoramic wide landscape"
@@ -212,6 +217,46 @@ ZONE_CONTENT = {
         "narration": "The final frontier. Deep Space awaits. Only the strongest survive here.",
     },
 }
+
+
+def _get_audio_duration(coll, audio_id: str, fallback: float = 5.0) -> float:
+    """Fetch exact OmniVoice duration from VideoDB (required for timeline editor)."""
+    try:
+        audio = coll.get_audio(audio_id)
+        length = float(audio.length)
+        if length > 0:
+            return round(length * 0.98, 2)
+    except Exception as exc:
+        logger.warning("Could not fetch audio length for %s: %s", audio_id, exc)
+    return fallback
+
+
+def _try_flux_image_clip(img_id: str, duration: float, coll):
+    """Attempt FLUX ImageAsset clip; returns None if editor cannot use this image."""
+    from videodb.editor import ImageAsset, Clip, Fit
+
+    if not img_id:
+        return None
+    try:
+        img = coll.get_image(img_id)
+        if not _optional_url(img):
+            return None
+        return Clip(asset=ImageAsset(id=img_id), duration=duration, fit=Fit.crop)
+    except Exception as exc:
+        logger.info("FLUX image clip unavailable for %s: %s", img_id, exc)
+        return None
+
+
+def _text_zone_clip(zone: str, duration: float, theme: str = ""):
+    """Text + styled visual fallback when FLUX image URLs are unavailable."""
+    from videodb.editor import TextAsset, Clip, Font
+
+    info = ZONE_CONTENT.get(zone, {})
+    title = info.get("title", zone.replace("_", " ").title())
+    if theme:
+        title = f"{title}\n{theme}"
+    font = Font(family="Arial", size=38, color="#00f0ff")
+    return Clip(asset=TextAsset(text=title, font=font), duration=duration)
 
 
 def _wait_generation_job(job, timeout: int = 240):
@@ -633,36 +678,57 @@ def generate_trailer():
 
         timeline = Timeline(conn)
         timeline.resolution = "1280x720"
-        timeline.background = "#0b0b0f"
+        timeline.background = "#000000"
 
-        image_track = Track()
+        visual_track = Track()
         audio_track = Track()
-        
         current_time = 0.0
+        used_flux = False
 
         for zone in zones_visited:
             zone_assets = assets.get(zone) or {}
             img_id = zone_assets.get("image_id")
             aud_id = zone_assets.get("audio_id")
-            aud_len = float(zone_assets.get("audio_length", 5.0))
+            if not aud_id:
+                continue
 
-            if img_id and aud_id:
-                image_track.add_clip(current_time, Clip(asset=ImageAsset(id=img_id), duration=aud_len, fit=Fit.crop))
-                audio_track.add_clip(current_time, Clip(asset=AudioAsset(id=aud_id), duration=aud_len))
-                current_time += aud_len
+            aud_len = _get_audio_duration(
+                coll, aud_id, float(zone_assets.get("audio_length", 5.0))
+            )
+
+            visual_clip = _try_flux_image_clip(img_id, aud_len, coll)
+            if visual_clip is None:
+                visual_clip = _text_zone_clip(zone, aud_len, theme)
+            else:
+                used_flux = True
+
+            visual_track.add_clip(current_time, visual_clip)
+            audio_track.add_clip(
+                current_time,
+                Clip(asset=AudioAsset(id=aud_id), duration=aud_len),
+            )
+            current_time += aud_len
 
         if current_time > 0:
-            timeline.add_track(image_track)
+            timeline.add_track(visual_track)
             timeline.add_track(audio_track)
-            
+
             stream_url = timeline.generate_stream()
-            player_url = getattr(timeline, "player_url", None) or f"https://player.videodb.io/watch?v={stream_url}"
-            
-            logger.info("Compiled highlights trailer: %s", player_url)
+            player_url = (
+                getattr(timeline, "player_url", None)
+                or f"https://player.videodb.io/watch?v={stream_url}"
+            )
+
+            logger.info(
+                "Compiled highlights trailer (flux_visuals=%s): %s",
+                used_flux,
+                player_url,
+            )
             return jsonify({
                 "stream_url": stream_url,
                 "player_url": player_url,
-                "success": True
+                "success": True,
+                "used_flux_images": used_flux,
             }), 200
         else:
             return jsonify({
@@ -675,11 +741,14 @@ def generate_trailer():
 
     except Exception as exc:
         logger.exception("Failed to generate trailer video.")
+        err = str(exc).strip()
+        if err.startswith("Stitching failed:"):
+            err = err.replace("Stitching failed:", "", 1).strip()
         return jsonify({
             "stream_url": None,
             "player_url": None,
             "success": False,
-            "error": f"Stitching failed: {str(exc)}"
+            "error": err or "Timeline editor failed",
         }), 200
 
 
