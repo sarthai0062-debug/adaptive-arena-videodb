@@ -27,6 +27,12 @@ const API = (() => {
             sandboxId = data.sandbox_id || data.sandboxId || null;
             console.log('[API] Sandbox created (ID: ' + sandboxId + '), status: ' + data.status);
             
+            // If sandbox start returned demo_mode or is already ready/active, return immediately
+            if (data.status === 'demo_mode' || data.status === 'ready' || data.status === 'active' || data.status === 'success') {
+                console.log('[API] Sandbox started in status:', data.status);
+                return data;
+            }
+
             // If the sandbox is provisioning, poll until it is active/ready!
             if (sandboxId && data.status === 'provisioning') {
                 const loadingTextEl = document.getElementById('loading-text');
@@ -52,6 +58,9 @@ const API = (() => {
                                 isReady = true;
                                 data.status = 'ready';
                                 console.log('[API] Sandbox is now fully ready.');
+                                break;
+                            } else if (statusData.status === 'demo_mode') {
+                                console.log('[API] Sandbox status returned demo_mode. Switching to fallback.');
                                 break;
                             }
                         }
@@ -185,7 +194,7 @@ const API = (() => {
         // Construct stateless assets payload from frontend caches
         const assets = {};
         for (const zone of zonesVisited) {
-            const cacheKey = theme ? `${zone}_theme` : zone; // Handle key formats consistently
+            const cacheKey = theme ? `${zone}_${theme}` : zone; // Handle key formats consistently
             let img = imageCache[cacheKey] || imageCache[zone];
             
             const narrationTexts = {

@@ -149,16 +149,23 @@ def sandbox_status():
         sandbox = conn.get_sandbox(sandbox_id)
         status = getattr(sandbox, "status", "unknown")
         
+        # Normalize status to string if it is an enum or other type
+        if hasattr(status, "value"):
+            status_str = str(status.value)
+        else:
+            status_str = str(status)
+        status_str = status_str.lower()
+        
         # Check active properties
         if hasattr(sandbox, "is_active") and sandbox.is_active:
-            status = "ready"
-        elif status == "active":
-            status = "ready"
+            status_str = "ready"
+        elif status_str in ("active", "ready", "success"):
+            status_str = "ready"
             
-        logger.info("Checked status for sandbox %s: %s", sandbox_id, status)
+        logger.info("Checked status for sandbox %s: %s", sandbox_id, status_str)
         return jsonify({
             "sandbox_id": sandbox_id,
-            "status": status
+            "status": status_str
         }), 200
     except Exception as exc:
         logger.warning("Failed to check sandbox status for %s: %s", sandbox_id, str(exc))
@@ -391,7 +398,7 @@ def generate_trailer():
             timeline.add_track(audio_track)
             
             stream_url = timeline.generate_stream()
-            player_url = f"https://player.videodb.io/watch?v={stream_url}"
+            player_url = getattr(timeline, "player_url", None) or f"https://player.videodb.io/watch?v={stream_url}"
             
             logger.info("Compiled highlights trailer: %s", player_url)
             return jsonify({
