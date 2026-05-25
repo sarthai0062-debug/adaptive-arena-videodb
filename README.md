@@ -60,13 +60,17 @@ source .venv/bin/activate  # On macOS/Linux
 pip install -r requirements.txt
 ```
 
-### 3. Set Up VideoDB API Key (Optional for Full Mode)
-To experience the live AI image generation, set your VideoDB API key in your environment variables. Get one from [console.videodb.io](https://console.videodb.io/dashboard).
+### 3. Set Up VideoDB API Key (Required for Live Mode)
+To experience live FLUX backgrounds, OmniVoice narration, and highlight stitching, set your VideoDB API key. Get one from [console.videodb.io](https://console.videodb.io/dashboard).
 
 ```bash
 export VIDEODB_API_KEY="your_videodb_api_key_here"
+# VIDEO_DB_API_KEY is also accepted
 ```
-*Note: If this variable is omitted, the game automatically runs in **Demo Mode** with fully functional gameplay and beautiful animated procedural backgrounds.*
+
+**Vercel deployment:** In your Vercel project → Settings → Environment Variables, add `VIDEODB_API_KEY` (or `VIDEO_DB_API_KEY`) for Production, then redeploy. Without it, the site stays in **Demo Mode (Offline)**.
+
+*Note: If the key is omitted, the game still runs in **Demo Mode** with procedural gradient backgrounds.*
 
 ### 4. Start the Server
 Run the Flask server:

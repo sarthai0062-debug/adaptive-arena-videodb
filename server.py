@@ -33,6 +33,9 @@ logger = logging.getLogger("adaptive-arena")
 VIDEODB_AVAILABLE = False
 try:
     from videodb import connect, SandboxModel, SandboxTier
+    from videodb.job import GenerationJob
+    from videodb.image import Image
+    from videodb.audio import Audio
 
     VIDEODB_AVAILABLE = True
     logger.info("VideoDB SDK loaded successfully.")
@@ -85,6 +88,56 @@ def _is_invalid_sandbox(sandbox_id) -> bool:
     if str(sandbox_id).strip().lower() in ("null", "undefined", "none", ""):
         return True
     return False
+
+
+def _sandbox_status_str(sandbox) -> str:
+    status = getattr(sandbox, "status", "unknown")
+    if hasattr(status, "value"):
+        return str(status.value).lower()
+    return str(status).lower()
+
+
+def _ensure_sandbox_ready(sandbox_id: str):
+    """Return an active sandbox, waiting briefly if still provisioning."""
+    conn = connect()
+    sandbox = conn.get_sandbox(sandbox_id)
+    if getattr(sandbox, "is_active", False) or _sandbox_status_str(sandbox) == "active":
+        return sandbox
+    logger.info("Sandbox %s not active yet. Waiting for ready state...", sandbox_id)
+    sandbox.wait_for_ready(timeout=180, interval=3)
+    return sandbox
+
+
+def _resolve_generation_job(job_id: str, result_type: str) -> dict:
+    """Poll a VideoDB generation job and return a JSON-serializable status payload."""
+    conn = connect()
+    job = GenerationJob(conn, job_id, result_type=result_type)
+    job.refresh()
+
+    if job.status == "processing":
+        return {"status": "processing", "job_id": job_id}
+
+    if job.status == "failed":
+        return {"status": "failed", "job_id": job_id, "error": "Generation job failed"}
+
+    asset = job._to_asset()
+    if isinstance(asset, Image):
+        return {
+            "status": "completed",
+            "job_id": job_id,
+            "image_url": asset.generate_url(),
+            "image_id": asset.id,
+        }
+    if isinstance(asset, Audio):
+        return {
+            "status": "completed",
+            "job_id": job_id,
+            "audio_url": asset.generate_url(),
+            "audio_id": asset.id,
+            "audio_length": float(asset.length) if hasattr(asset, "length") else 5.0,
+        }
+
+    return {"status": "failed", "job_id": job_id, "error": "Unknown generation result"}
 
 # ---------------------------------------------------------------------------
 # Routes — Static files
@@ -139,7 +192,8 @@ def start_sandbox():
 
         # No active/provisioning sandbox found, create a new one
         sandbox = conn.create_sandbox(
-            tier=SandboxTier.medium
+            tier=SandboxTier.medium,
+            idle_timeout=600,
         )
         logger.info("Sandbox %s provisioned asynchronously.", sandbox.id)
 
@@ -199,6 +253,30 @@ def sandbox_status():
         }), 200
 
 
+@app.route("/api/generation-status", methods=["GET"])
+def generation_status():
+    """Poll a FLUX/OmniVoice generation job (client-side polling for serverless timeouts)."""
+    job_id = request.args.get("job_id")
+    result_type = request.args.get("type", "image")
+
+    if not job_id:
+        return jsonify({"error": "'job_id' query parameter is required."}), 400
+
+    if not _is_ready():
+        return jsonify({"status": "demo_mode", "message": _demo_error_message()}), 200
+
+    try:
+        payload = _resolve_generation_job(job_id, result_type)
+        return jsonify(payload), 200
+    except Exception as exc:
+        logger.warning("Failed to resolve generation job %s: %s", job_id, str(exc))
+        return jsonify({
+            "status": "error",
+            "job_id": job_id,
+            "error": str(exc),
+        }), 200
+
+
 @app.route("/api/generate-background", methods=["POST"])
 def generate_background():
     """Generate a background image using FLUX on the specified sandbox (with Demo fallback support)."""
@@ -225,9 +303,9 @@ def generate_background():
     try:
         conn = connect()
         coll = conn.get_collection()
-        
+
         try:
-            sandbox = conn.get_sandbox(sandbox_id)
+            _ensure_sandbox_ready(sandbox_id)
         except Exception as sb_exc:
             logger.warning("Sandbox %s not found or expired. Falling back to Demo Mode: %s", sandbox_id, str(sb_exc))
             return jsonify({
@@ -235,34 +313,38 @@ def generate_background():
                 "image_url": None,
                 "image_id": None,
                 "cached": False,
-                "message": f"Sandbox not found. Running in Fallback Mode."
+                "message": "Sandbox not found. Running in Fallback Mode."
             }), 200
 
-        # Check ready status and block if still provisioning
-        if not getattr(sandbox, "is_active", False) and getattr(sandbox, "status", "") != "active":
-            logger.info("Sandbox %s not active yet. Waiting for ready state in generate_background...", sandbox_id)
-            sandbox.wait_for_ready(timeout=180, interval=3)
-
-        logger.info("Generating FLUX image (sandbox=%s) ...", sandbox_id)
-        job = coll.generate_image(
+        logger.info("Submitting FLUX image job (sandbox=%s) ...", sandbox_id)
+        result = coll.generate_image(
             prompt=prompt,
             model_name=SandboxModel.FLUX,
             sandbox_id=sandbox_id,
             aspect_ratio="16:9",
+            wait=False,
             config={
                 "size": "1280x720",
                 "num_inference_steps": 28,
                 "guidance_scale": 4.0,
             },
         )
-        image = job.wait(timeout=300, interval=3)
-        url = image.generate_url()
-        logger.info("Image ready: %s", url)
+
+        if isinstance(result, Image):
+            url = result.generate_url()
+            logger.info("Image ready immediately: %s", url)
+            return jsonify({
+                "zone_name": zone_name,
+                "status": "completed",
+                "image_url": url,
+                "image_id": result.id,
+                "cached": False,
+            }), 200
 
         return jsonify({
             "zone_name": zone_name,
-            "image_url": url,
-            "image_id": image.id,
+            "status": "processing",
+            "job_id": result.job_id,
             "cached": False,
         }), 200
 
@@ -301,9 +383,9 @@ def generate_narration():
     try:
         conn = connect()
         coll = conn.get_collection()
-        
+
         try:
-            sandbox = conn.get_sandbox(sandbox_id)
+            _ensure_sandbox_ready(sandbox_id)
         except Exception as sb_exc:
             logger.warning("Sandbox %s not found or expired. Falling back to Demo Mode: %s", sandbox_id, str(sb_exc))
             return jsonify({
@@ -314,16 +396,12 @@ def generate_narration():
                 "message": "Sandbox not found. Running in Fallback Mode."
             }), 200
 
-        # Check ready status and block if still provisioning
-        if not getattr(sandbox, "is_active", False) and getattr(sandbox, "status", "") != "active":
-            logger.info("Sandbox %s not active yet. Waiting for ready state in generate_narration...", sandbox_id)
-            sandbox.wait_for_ready(timeout=180, interval=3)
-
-        logger.info("Generating narration (sandbox=%s) ...", sandbox_id)
-        job = coll.generate_voice(
+        logger.info("Submitting OmniVoice job (sandbox=%s) ...", sandbox_id)
+        result = coll.generate_voice(
             text=text,
             model_name=SandboxModel.OMNIVOICE,
             sandbox_id=sandbox_id,
+            wait=False,
             config={
                 "instructions": (
                     "Epic male narrator voice, deep and dramatic, "
@@ -331,14 +409,21 @@ def generate_narration():
                 ),
             },
         )
-        audio = job.wait(timeout=300, interval=3)
-        url = audio.generate_url()
-        logger.info("Narration ready: %s", url)
+
+        if isinstance(result, Audio):
+            url = result.generate_url()
+            logger.info("Narration ready immediately: %s", url)
+            return jsonify({
+                "status": "completed",
+                "audio_url": url,
+                "audio_id": result.id,
+                "audio_length": float(result.length) if hasattr(result, "length") else 5.0,
+                "cached": False,
+            }), 200
 
         return jsonify({
-            "audio_url": url,
-            "audio_id": audio.id,
-            "audio_length": float(audio.length) if hasattr(audio, "length") else 5.0,
+            "status": "processing",
+            "job_id": result.job_id,
             "cached": False,
         }), 200
 
@@ -368,8 +453,8 @@ def generate_trailer():
         return jsonify({
             "stream_url": None,
             "player_url": None,
-            "success": True,
-            "error": "Running in Demo/Fallback Mode."
+            "success": False,
+            "error": "Running in Demo/Fallback Mode. Start a game session with Sandbox Active first."
         }), 200
 
     try:
@@ -378,20 +463,15 @@ def generate_trailer():
         conn = connect()
         
         try:
-            sandbox = conn.get_sandbox(sandbox_id)
+            _ensure_sandbox_ready(sandbox_id)
         except Exception as sb_exc:
             logger.warning("Sandbox %s not found or expired. Falling back to Demo Mode: %s", sandbox_id, str(sb_exc))
             return jsonify({
                 "stream_url": None,
                 "player_url": None,
-                "success": True,
+                "success": False,
                 "error": "Sandbox expired. Running in Fallback Mode."
             }), 200
-
-        # Check ready status and block if still provisioning
-        if not getattr(sandbox, "is_active", False) and getattr(sandbox, "status", "") != "active":
-            logger.info("Sandbox %s not active yet. Waiting for ready state in generate_trailer...", sandbox_id)
-            sandbox.wait_for_ready(timeout=180, interval=3)
 
         timeline = Timeline(conn)
         timeline.resolution = "1280x720"
@@ -431,16 +511,19 @@ def generate_trailer():
             }), 200
         else:
             return jsonify({
-                "error": "No matching generated assets were found in this session to stitch.",
+                "error": (
+                    "No FLUX/OmniVoice assets found for this session. "
+                    "Play through zones with Sandbox Active so backgrounds and narration can finish generating."
+                ),
                 "success": False
             }), 200
 
     except Exception as exc:
-        logger.exception("Failed to generate trailer video. Falling back to Demo Mode.")
+        logger.exception("Failed to generate trailer video.")
         return jsonify({
             "stream_url": None,
             "player_url": None,
-            "success": True,
+            "success": False,
             "error": f"Stitching failed: {str(exc)}"
         }), 200
 

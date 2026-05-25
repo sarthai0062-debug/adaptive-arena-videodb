@@ -109,11 +109,15 @@ const Game = (() => {
             generateTrailerBtn.addEventListener('click', handleTrailerGeneration);
         }
 
-        // 4. Initial connection check
+        // 4. Initial connection check (VideoDB API key + SDK on server)
         updateConnectionStatus(false, 'Connecting...');
-        const connected = await API.checkConnection();
-        if (connected) {
-            updateConnectionStatus(true, 'VideoDB Online');
+        const status = await API.getStatus();
+        if (status && status.mode === 'full') {
+            updateConnectionStatus(true, 'VideoDB Ready');
+        } else if (status && !status.api_key_set) {
+            updateConnectionStatus(false, 'Demo Mode — API Key Missing');
+        } else if (status && !status.videodb_available) {
+            updateConnectionStatus(false, 'Demo Mode — SDK Missing');
         } else {
             updateConnectionStatus(false, 'VideoDB Demo Mode');
         }
@@ -193,9 +197,15 @@ const Game = (() => {
         updateConnectionStatus(false, 'Starting Sandbox...');
         const sandboxSession = await API.startSandbox();
 
-        if (sandboxSession && (sandboxSession.sandbox_id || sandboxSession.sandboxId)) {
-            updateConnectionStatus(true, 'Sandbox Active');
-            console.log('[Game] VideoDB Sandbox created:', API.sandboxId);
+        if (sandboxSession && sandboxSession.status === 'demo_mode') {
+            updateConnectionStatus(false, 'Demo Mode (Offline)');
+            console.warn('[Game] VideoDB backend in demo mode:', sandboxSession.message);
+        } else if (API.sandboxId) {
+            const label = sandboxSession.status === 'provisioning'
+                ? 'Sandbox Warming Up'
+                : 'Sandbox Active';
+            updateConnectionStatus(true, label);
+            console.log('[Game] VideoDB Sandbox:', API.sandboxId, sandboxSession.status);
         } else {
             updateConnectionStatus(false, 'Demo Mode (Offline)');
             console.warn('[Game] VideoDB Sandbox not started. Falling back to procedural Demo Mode.');

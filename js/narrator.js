@@ -60,7 +60,7 @@ const Narrator = (() => {
                         text: text,
                         sandbox_id: sandboxId,
                     }),
-                    signal: AbortSignal.timeout(90000),
+                    signal: AbortSignal.timeout(30000),
                 });
 
                 if (!response.ok) {
@@ -68,16 +68,27 @@ const Narrator = (() => {
                     return null;
                 }
 
-                const data = await response.json();
+                let data = await response.json();
+
+                if (data.status === 'processing' && data.job_id && typeof API !== 'undefined' && API.pollGenerationJob) {
+                    const polled = await API.pollGenerationJob(data.job_id, 'audio', 300000);
+                    if (polled) {
+                        data = { ...data, ...polled };
+                    } else {
+                        return null;
+                    }
+                }
+
                 const url = data.audio_url || null;
 
                 if (url) {
-                    audioCache[text] = {
+                    const entry = {
                         url: url,
                         id: data.audio_id || null,
                         length: data.audio_length || 5.0
                     };
-                    audioCache[key] = audioCache[text]; // Support lookup by both key and raw text
+                    audioCache[text] = entry;
+                    audioCache[key] = entry;
                     console.log('[Narrator] Cached narration for', key, 'ID:', data.audio_id);
                 }
                 return url;
