@@ -52,7 +52,10 @@ const API = (() => {
             if (data.status === 'completed') {
                 return data;
             }
-            if (data.error) {
+            if (data.status === 'completed' && (data.image_id || data.audio_id)) {
+                return data;
+            }
+            if (data.error && data.status !== 'processing') {
                 console.warn('[API] Generation job error:', data.error);
                 return null;
             }
@@ -160,11 +163,11 @@ const API = (() => {
         }
 
         const finish = (data) => {
+            if (!data.image_id) return null;
             const url = data.url || data.image_url || null;
-            if (!url) return null;
-            const resObj = { url, id: data.image_id || null };
+            const resObj = { url, id: data.image_id };
             imageCache[cacheKey] = resObj;
-            if (typeof Background !== 'undefined' && Background.onImageReady) {
+            if (url && typeof Background !== 'undefined' && Background.onImageReady) {
                 Background.onImageReady(zoneName, theme, resObj);
             }
             return resObj;
@@ -231,11 +234,10 @@ const API = (() => {
                 data = { ...data, ...polled };
             }
 
-            const url = data.audio_url;
-            if (!url || !data.audio_id) return null;
+            if (!data.audio_id) return null;
 
             const entry = {
-                url,
+                url: data.audio_url || null,
                 id: data.audio_id,
                 length: data.audio_length || 5.0
             };
@@ -342,7 +344,7 @@ const API = (() => {
         if (Object.keys(assets).length === 0) {
             return {
                 success: false,
-                error: 'Could not generate FLUX/OmniVoice assets. Check VideoDB credits and try again.'
+                error: 'Could not generate FLUX/OmniVoice assets. Ensure Sandbox Active, wait for jobs to finish, then retry.'
             };
         }
 

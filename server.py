@@ -108,33 +108,67 @@ def _ensure_sandbox_ready(sandbox_id: str):
     return sandbox
 
 
+def _optional_url(asset):
+    """Best-effort signed URL; timeline stitching only needs asset ids."""
+    try:
+        return asset.generate_url()
+    except Exception as exc:
+        logger.info("generate_url skipped (asset id is sufficient): %s", exc)
+        return None
+
+
 def _resolve_generation_job(job_id: str, result_type: str) -> dict:
     """Poll a VideoDB generation job and return a JSON-serializable status payload."""
     conn = connect()
     job = GenerationJob(conn, job_id, result_type=result_type)
     job.refresh()
 
-    if job.status == "processing":
+    if job.status in ("processing", "pending", "queued"):
         return {"status": "processing", "job_id": job_id}
 
     if job.status == "failed":
         return {"status": "failed", "job_id": job_id, "error": "Generation job failed"}
 
-    asset = job._to_asset()
+    try:
+        asset = job._to_asset()
+    except Exception as exc:
+        logger.warning("Could not resolve asset for job %s: %s", job_id, exc)
+        return {"status": "failed", "job_id": job_id, "error": str(exc)}
+
     if isinstance(asset, Image):
-        return {
+        payload = {
             "status": "completed",
             "job_id": job_id,
-            "image_url": asset.generate_url(),
             "image_id": asset.id,
         }
+        url = _optional_url(asset)
+        if url:
+            payload["image_url"] = url
+        return payload
+
     if isinstance(asset, Audio):
+        payload = {
+            "status": "completed",
+            "job_id": job_id,
+            "audio_id": asset.id,
+            "audio_length": float(asset.length) if hasattr(asset, "length") else 5.0,
+        }
+        url = _optional_url(asset)
+        if url:
+            payload["audio_url"] = url
+        return payload
+
+    # Fallback: read id from raw job payload
+    data = job.data or {}
+    asset_id = data.get("id")
+    if asset_id and asset_id.startswith("img-"):
+        return {"status": "completed", "job_id": job_id, "image_id": asset_id}
+    if asset_id and asset_id.startswith("a-"):
         return {
             "status": "completed",
             "job_id": job_id,
-            "audio_url": asset.generate_url(),
-            "audio_id": asset.id,
-            "audio_length": float(asset.length) if hasattr(asset, "length") else 5.0,
+            "audio_id": asset_id,
+            "audio_length": float(data.get("length", 5.0)),
         }
 
     return {"status": "failed", "job_id": job_id, "error": "Unknown generation result"}
@@ -225,9 +259,9 @@ def _generate_zone_assets(conn, coll, sandbox_id: str, zone: str, theme: str = "
 
     return {
         "image_id": image.id,
-        "image_url": image.generate_url(),
+        "image_url": _optional_url(image),
         "audio_id": audio.id,
-        "audio_url": audio.generate_url(),
+        "audio_url": _optional_url(audio),
         "audio_length": float(audio.length) if hasattr(audio, "length") else 5.0,
     }
 
@@ -424,15 +458,19 @@ def generate_background():
         )
 
         if isinstance(result, Image):
-            url = result.generate_url()
-            logger.info("Image ready immediately: %s", url)
-            return jsonify({
+            payload = {
                 "zone_name": zone_name,
                 "status": "completed",
-                "image_url": url,
                 "image_id": result.id,
                 "cached": False,
-            }), 200
+            }
+            url = _optional_url(result)
+            if url:
+                payload["image_url"] = url
+                logger.info("Image ready immediately: %s", url)
+            else:
+                logger.info("Image ready (id=%s), url skipped due to plan limits.", result.id)
+            return jsonify(payload), 200
 
         return jsonify({
             "zone_name": zone_name,
@@ -504,15 +542,17 @@ def generate_narration():
         )
 
         if isinstance(result, Audio):
-            url = result.generate_url()
-            logger.info("Narration ready immediately: %s", url)
-            return jsonify({
+            payload = {
                 "status": "completed",
-                "audio_url": url,
                 "audio_id": result.id,
                 "audio_length": float(result.length) if hasattr(result, "length") else 5.0,
                 "cached": False,
-            }), 200
+            }
+            url = _optional_url(result)
+            if url:
+                payload["audio_url"] = url
+                logger.info("Narration ready immediately: %s", url)
+            return jsonify(payload), 200
 
         return jsonify({
             "status": "processing",
