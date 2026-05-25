@@ -105,7 +105,7 @@ def serve_static(filepath: str):
 
 @app.route("/api/start-sandbox", methods=["POST"])
 def start_sandbox():
-    """Create a new VideoDB sandbox and return immediately (asynchronous provisioning)."""
+    """Create a new VideoDB sandbox or reuse an existing active/provisioning sandbox of medium tier."""
     if not _is_ready():
         return jsonify({
             "sandbox_id": None,
@@ -115,6 +115,29 @@ def start_sandbox():
 
     try:
         conn = connect()
+        
+        # Look for an existing active or provisioning medium sandbox to reuse and avoid limit errors
+        existing_sandbox = None
+        try:
+            for sb in conn.list_sandboxes():
+                tier_val = sb.tier.value if hasattr(sb.tier, "value") else str(sb.tier)
+                status_val = sb.status.value if hasattr(sb.status, "value") else str(sb.status)
+                
+                if tier_val.lower() == "medium" and status_val.lower() in ("active", "provisioning"):
+                    existing_sandbox = sb
+                    break
+        except Exception as list_exc:
+            logger.warning("Failed to list existing sandboxes: %s", str(list_exc))
+
+        if existing_sandbox:
+            status_val = existing_sandbox.status.value if hasattr(existing_sandbox.status, "value") else str(existing_sandbox.status)
+            logger.info("Reusing existing sandbox %s in status %s.", existing_sandbox.id, status_val)
+            return jsonify({
+                "sandbox_id": existing_sandbox.id,
+                "status": "ready" if status_val.lower() == "active" else "provisioning",
+            }), 200
+
+        # No active/provisioning sandbox found, create a new one
         sandbox = conn.create_sandbox(
             tier=SandboxTier.medium
         )
