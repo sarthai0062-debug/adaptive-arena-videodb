@@ -1,0 +1,24 @@
+# Virtual environment
+.venv/
+env/
+venv/
+ENV/
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment variables (Sensitive API Keys)
+.env
+
+# System / IDE
+.DS_Store
+.vscode/
+.idea/
+
+# Gemini Antigravity Agent logs and metadata
+.system_generated/
+.agents/
+.gemini/

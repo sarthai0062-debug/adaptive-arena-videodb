@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Adaptive Arena — AI-Driven 2D Sandbox Combat Game</title>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+    
+    <!-- Application Styles -->
+    <link rel="stylesheet" href="index.css">
+</head>
+<body>
+
+    <div class="game-container" id="game-container">
+        
+        <!-- ============================================
+             HUD — Heads-Up Display Panel
+             ============================================ -->
+        <div class="hud hidden" id="hud">
+            <!-- Health Bar -->
+            <div class="hud-health">
+                <span class="hud-health-label">HP</span>
+                <div class="hud-health-bar">
+                    <div class="hud-health-fill" id="health-fill" style="width: 100%;"></div>
+                </div>
+            </div>
+            
+            <!-- Score Value -->
+            <div class="hud-score">
+                <span class="hud-score-label">Score:</span>
+                <span class="hud-score-value" id="score-value">0000</span>
+            </div>
+            
+            <!-- Active Theme Zone -->
+            <div class="hud-zone" id="zone-value">Enchanted Forest</div>
+
+            <!-- Combo Counter -->
+            <div class="hud-combo hidden" id="combo-display">
+                <span class="hud-combo-count" id="combo-count">0</span>
+                <span class="hud-combo-label">COMBO</span>
+            </div>
+
+            <!-- Wave Indicator -->
+            <div class="hud-wave" id="wave-display">
+                <span class="hud-wave-label">WAVE</span>
+                <span class="hud-wave-value" id="wave-value">1</span>
+            </div>
+        </div>
+
+        <!-- ============================================
+             Toast Notifications for Zone Transitions
+             ============================================ -->
+        <div class="zone-toast" id="zone-toast">Enchanted Forest</div>
+
+        <div class="kill-streak" id="kill-streak">
+            <span class="kill-streak-text" id="kill-streak-text">DOUBLE KILL!</span>
+        </div>
+
+        <!-- ============================================
+             Main 60fps Canvas Display
+             ============================================ -->
+        <canvas class="game-canvas" id="game-canvas" width="1280" height="720"></canvas>
+
+        <!-- ============================================
+             Start/Welcome Dashboard Screen
+             ============================================ -->
+        <div class="start-screen" id="start-screen">
+            <span class="start-badge">VideoDB Sandbox Demo</span>
+            <h1 class="start-title">Adaptive Arena</h1>
+            <p class="start-subtitle">An Immersive Real-Time AI Generation Experience</p>
+            
+            <p class="start-description">
+                Engage in combat across 5 dynamic elemental zones. 
+                As you advance, the game context, enemies, and high-fidelity 
+                <strong>FLUX backgrounds</strong> are dynamically generated and 
+                streamed in real-time using VideoDB's Sandbox API.
+            </p>
+
+            <!-- Custom Theme Input -->
+            <div class="theme-input-container">
+                <label for="theme-input" class="theme-input-label">CUSTOM ARENA THEME</label>
+                <input type="text" id="theme-input" class="theme-input-field" placeholder="e.g. Steampunk Factory, Candy Grid, Ice Palace..." value="Retro Cyberpunk City">
+            </div>
+            
+            <button class="start-btn" id="start-btn">Start Game Session</button>
+            
+            <div class="start-controls">
+                <p><strong>CONTROLS:</strong></p>
+                <p><kbd>W</kbd> / <kbd>▲</kbd> : Jump (2x) | <kbd>A</kbd> <kbd>D</kbd> / <kbd>◀</kbd> <kbd>▶</kbd> : Run | <kbd>Space</kbd> : Attack (Combo) | <kbd>Shift</kbd> : Dash | <kbd>Esc</kbd> : Pause</p>
+            </div>
+        </div>
+
+        <!-- ============================================
+             Performance Rating & Generation Popup Modal
+             ============================================ -->
+        <div class="performance-modal hidden" id="performance-modal">
+            <div class="performance-modal-content">
+                <span class="performance-modal-badge">VideoDB FLUX Sandbox</span>
+                <h3 class="performance-modal-title">Generating New Background</h3>
+                
+                <div class="performance-modal-details">
+                    <span class="performance-modal-label">ACTIVE THEME:</span>
+                    <span class="performance-modal-theme" id="modal-theme-value">Retro Cyberpunk City</span>
+                </div>
+
+                <div class="performance-modal-rank-box">
+                    <span class="performance-modal-rank-label">CURRENT PLAYER PERFORMANCE:</span>
+                    <h2 class="performance-modal-rank-value" id="modal-rank-value">EXCEPTIONAL (SURVIVOR)</h2>
+                    <p class="performance-modal-rank-desc" id="modal-rank-desc">Your combat stats and scoring rate are perfectly on track.</p>
+                </div>
+
+                <div class="performance-modal-loader">
+                    <div class="performance-modal-progress"></div>
+                </div>
+                <span class="performance-modal-loading-text">Synthesizing widescreen assets...</span>
+            </div>
+        </div>
+
+        <!-- ============================================
+             VideoDB Sandbox Setup Loading Screen
+             ============================================ -->
+        <div class="loading-screen hidden" id="loading-screen">
+            <div class="loading-spinner"></div>
+            <div class="loading-text" id="loading-text">Starting VideoDB Sandbox...</div>
+        </div>
+
+        <!-- ============================================
+             Game Over & Stat Summary Screen
+             ============================================ -->
+        <div class="game-over-screen hidden" id="game-over-screen">
+            <h2 class="game-over-title">Arena Cleared</h2>
+            <div class="game-over-stats">
+                <div class="game-over-stat-card">
+                    <span class="stat-card-label">Final Score</span>
+                    <span class="stat-card-value" id="final-score">0</span>
+                </div>
+                <div class="game-over-stat-card">
+                    <span class="stat-card-label">Enemies Defeated</span>
+                    <span class="stat-card-value" id="final-kills">0</span>
+                </div>
+                <div class="game-over-stat-card">
+                    <span class="stat-card-label">Max Combo</span>
+                    <span class="stat-card-value" id="final-combo">0</span>
+                </div>
+                <div class="game-over-stat-card">
+                    <span class="stat-card-label">Time Survived</span>
+                    <span class="stat-card-value" id="final-time">0:00</span>
+                </div>
+            </div>
+
+            <!-- VideoDB Cinematic Highlight Trailer Generator -->
+            <div class="highlight-trailer-container" id="trailer-container">
+                <span class="trailer-badge">VideoDB Sandbox Timeline composition</span>
+                <h3 class="trailer-title">Synthesize Arena Highlights Cinematic</h3>
+                <p class="trailer-description">Stitch your dynamic FLUX backgrounds with the OmniVoice narrator tracks into a synchronized cinematic highlights trailer using VideoDB's editor.</p>
+                <button class="generate-trailer-btn" id="generate-trailer-btn">Stitch highlights video</button>
+                <div class="trailer-loader hidden" id="trailer-loader">
+                    <div class="trailer-progress"></div>
+                    <span class="trailer-loading-text">Assembling tracks...</span>
+                </div>
+                <div class="trailer-player hidden" id="trailer-player-box">
+                    <iframe class="trailer-iframe" id="trailer-iframe" src="" allowfullscreen></iframe>
+                </div>
+            </div>
+
+            <button class="restart-btn" id="restart-btn">Play Again</button>
+        </div>
+
+        <div class="pause-menu hidden" id="pause-menu">
+            <div class="pause-menu-content">
+                <h2 class="pause-title">PAUSED</h2>
+                <div class="pause-stats">
+                    <div class="pause-stat"><span class="pause-stat-label">Score</span><span class="pause-stat-value" id="pause-score">0</span></div>
+                    <div class="pause-stat"><span class="pause-stat-label">Health</span><span class="pause-stat-value" id="pause-health">100</span></div>
+                    <div class="pause-stat"><span class="pause-stat-label">Zone</span><span class="pause-stat-value" id="pause-zone">Forest</span></div>
+                </div>
+                <button class="pause-resume-btn" id="pause-resume-btn">Resume</button>
+                <button class="pause-restart-btn" id="pause-restart-btn">Restart</button>
+            </div>
+        </div>
+
+        <!-- ============================================
+             Connection Monitor HUD Indicator
+             ============================================ -->
+        <div class="connection-status">
+            <div class="connection-dot" id="connection-dot"></div>
+            <span id="connection-text">Connecting...</span>
+        </div>
+
+    </div>
+
+    <!-- ============================================
+         Application JavaScript Modules
+         ============================================ -->
+    <script src="js/audio.js"></script>
+    <script src="js/api.js"></script>
+    <script src="js/narrator.js"></script>
+    <script src="js/background.js"></script>
+    <script src="js/platforms.js"></script>
+    <script src="js/collectibles.js"></script>
+    <script src="js/player.js"></script>
+    <script src="js/enemies.js"></script>
+    <script src="js/game.js"></script>
+    
+</body>
+</html>

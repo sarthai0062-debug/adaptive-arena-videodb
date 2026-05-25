@@ -1,0 +1,4 @@
+flask==3.1.1
+flask-cors==5.0.1
+git+https://github.com/Video-DB/videodb-python.git@hackathon
+python-dotenv==1.2.2
