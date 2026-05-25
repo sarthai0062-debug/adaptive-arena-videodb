@@ -124,14 +124,12 @@ const Background = (() => {
         const cacheKey = theme ? `${zoneName}_${theme}` : zoneName;
         if (API.imageCache[cacheKey]) return;
 
-        // Show the performance rating popup in game.js!
-        if (typeof Game !== 'undefined' && Game.showPerformancePopup) {
-            Game.showPerformancePopup();
-        }
-
         loadingZones.add(zoneName);
 
-        // Construct unique prompt combining the zone and the custom theme
+        if (typeof Game !== 'undefined' && Game.showZoneGenIndicator) {
+            Game.showZoneGenIndicator(ZONES[zoneName].name);
+        }
+
         const randomSeed = Math.floor(Math.random() * 1000000);
         let finalPrompt = ZONES[zoneName].prompt;
         if (theme) {
@@ -140,22 +138,25 @@ const Background = (() => {
             finalPrompt = `${finalPrompt}, unique seed #${randomSeed}`;
         }
 
-        API.generateBackground(zoneName, finalPrompt, theme).then(resObj => {
+        // Non-blocking: game keeps running while FLUX generates in the background
+        API.generateBackground(zoneName, finalPrompt, theme, { wait: false }).finally(() => {
             loadingZones.delete(zoneName);
-            if (resObj) {
-                const actualUrl = typeof resObj === 'object' ? resObj.url : resObj;
-                loadImage(actualUrl, zoneName === currentZone);
-            }
-            // Hide the performance rating popup in game.js when done
-            if (typeof Game !== 'undefined' && Game.hidePerformancePopup) {
-                Game.hidePerformancePopup();
-            }
-        }).catch(err => {
-            loadingZones.delete(zoneName);
-            if (typeof Game !== 'undefined' && Game.hidePerformancePopup) {
-                Game.hidePerformancePopup();
+            if (typeof Game !== 'undefined' && Game.hideZoneGenIndicator) {
+                Game.hideZoneGenIndicator();
             }
         });
+    }
+
+    function onImageReady(zoneName, theme, resObj) {
+        if (!resObj?.url) return;
+        const cacheKey = theme ? `${zoneName}_${theme}` : zoneName;
+        const isActive = zoneName === currentZone;
+        loadImage(resObj.url, isActive);
+        loadingZones.delete(zoneName);
+        if (typeof Game !== 'undefined' && Game.hideZoneGenIndicator) {
+            Game.hideZoneGenIndicator();
+        }
+        console.log('[Background] FLUX ready for', cacheKey);
     }
 
     function update(dt) {
@@ -308,6 +309,7 @@ const Background = (() => {
         render,
         getZoneForX,
         prefetchZone,
+        onImageReady,
         ZONES,
         get currentZone() { return currentZone; }
     };

@@ -139,6 +139,98 @@ def _resolve_generation_job(job_id: str, result_type: str) -> dict:
 
     return {"status": "failed", "job_id": job_id, "error": "Unknown generation result"}
 
+
+# Zone content for on-demand trailer asset generation (VideoDB sandbox guide pattern)
+ZONE_CONTENT = {
+    "forest": {
+        "prompt": (
+            "A mystical enchanted forest at twilight with glowing mushrooms, fireflies, "
+            "ancient trees with luminous vines, fantasy game art, panoramic wide landscape, vibrant colors"
+        ),
+        "narration": "You enter the Enchanted Forest. Ancient trees whisper of forgotten battles.",
+    },
+    "cave": {
+        "prompt": (
+            "A vast crystal cave with bioluminescent crystals, underground lake reflections, "
+            "purple and blue glowing formations, fantasy game art, panoramic wide landscape"
+        ),
+        "narration": "Darkness engulfs you as you descend into the Crystal Caves. Shadow bats circle overhead.",
+    },
+    "volcano": {
+        "prompt": (
+            "An erupting volcano landscape with rivers of flowing lava, dark red sky, obsidian rocks, "
+            "fire embers floating, dramatic fantasy game art, panoramic wide landscape"
+        ),
+        "narration": "The ground shakes beneath your feet. Welcome to the Volcanic Depths, warrior.",
+    },
+    "sky": {
+        "prompt": (
+            "A floating castle in the sky above clouds at golden hour, majestic towers, birds flying, "
+            "rainbow light rays, fantasy game art, panoramic wide landscape"
+        ),
+        "narration": "You ascend to the Sky Castle. Wind howls through floating ruins.",
+    },
+    "space": {
+        "prompt": (
+            "A colorful deep space nebula with distant galaxies, alien planet surfaces, cosmic dust clouds, "
+            "neon colors, sci-fi game art, panoramic wide landscape"
+        ),
+        "narration": "The final frontier. Deep Space awaits. Only the strongest survive here.",
+    },
+}
+
+
+def _wait_generation_job(job, timeout: int = 240):
+    """Block until a GenerationJob completes and return the asset."""
+    if isinstance(job, (Image, Audio)):
+        return job
+    return job.wait(timeout=timeout, interval=3)
+
+
+def _generate_zone_assets(conn, coll, sandbox_id: str, zone: str, theme: str = "") -> dict:
+    """Generate FLUX image + OmniVoice narration for one zone (hackathon combine-assets flow)."""
+    info = ZONE_CONTENT.get(zone)
+    if not info:
+        raise ValueError(f"Unknown zone: {zone}")
+
+    prompt = info["prompt"]
+    if theme:
+        prompt = f"{theme} style, {prompt}"
+
+    _ensure_sandbox_ready(sandbox_id)
+
+    image_job = coll.generate_image(
+        prompt=prompt,
+        model_name=SandboxModel.FLUX,
+        sandbox_id=sandbox_id,
+        aspect_ratio="16:9",
+        wait=False,
+        config={"size": "1280x720", "num_inference_steps": 28, "guidance_scale": 4.0},
+    )
+    image = _wait_generation_job(image_job, timeout=240)
+
+    voice_job = coll.generate_voice(
+        text=info["narration"],
+        model_name=SandboxModel.OMNIVOICE,
+        sandbox_id=sandbox_id,
+        wait=False,
+        config={
+            "instructions": (
+                "Epic male narrator voice, deep and dramatic, "
+                "like a dungeon master narrating a fantasy game"
+            ),
+        },
+    )
+    audio = _wait_generation_job(voice_job, timeout=120)
+
+    return {
+        "image_id": image.id,
+        "image_url": image.generate_url(),
+        "audio_id": audio.id,
+        "audio_url": audio.generate_url(),
+        "audio_length": float(audio.length) if hasattr(audio, "length") else 5.0,
+    }
+
 # ---------------------------------------------------------------------------
 # Routes — Static files
 # ---------------------------------------------------------------------------
@@ -270,10 +362,11 @@ def generation_status():
         return jsonify(payload), 200
     except Exception as exc:
         logger.warning("Failed to resolve generation job %s: %s", job_id, str(exc))
+        err_msg = str(exc)
         return jsonify({
-            "status": "error",
+            "status": "failed",
             "job_id": job_id,
-            "error": str(exc),
+            "error": err_msg,
         }), 200
 
 
@@ -438,6 +531,30 @@ def generate_narration():
         }), 200
 
 
+@app.route("/api/prepare-zone-assets", methods=["POST"])
+def prepare_zone_assets():
+    """Generate FLUX + OmniVoice for a single zone (used when stitching highlights)."""
+    data = request.get_json(silent=True) or {}
+    sandbox_id = data.get("sandbox_id")
+    zone = data.get("zone")
+    theme = data.get("theme", "")
+
+    if not zone or zone not in ZONE_CONTENT:
+        return jsonify({"error": "Valid 'zone' is required."}), 400
+
+    if not _is_ready() or _is_invalid_sandbox(sandbox_id):
+        return jsonify({"success": False, "error": _demo_error_message()}), 200
+
+    try:
+        conn = connect()
+        coll = conn.get_collection()
+        payload = _generate_zone_assets(conn, coll, sandbox_id, zone, theme)
+        return jsonify({"success": True, "zone": zone, **payload}), 200
+    except Exception as exc:
+        logger.exception("Failed to prepare zone assets for %s", zone)
+        return jsonify({"success": False, "zone": zone, "error": str(exc)}), 200
+
+
 @app.route("/api/generate-trailer", methods=["POST"])
 def generate_trailer():
     """Stitch FLUX background images and OmniVoice voice clips into a compiled highlights trailer using VideoDB timeline editor."""
@@ -445,7 +562,7 @@ def generate_trailer():
     sandbox_id = data.get("sandbox_id")
     zones_visited = data.get("zones_visited", ["forest", "cave", "volcano", "sky", "space"])
     theme = data.get("theme", "")
-    assets = data.get("assets", {}) # Stateless metadata passed by the client
+    assets = dict(data.get("assets") or {})
 
     # --- Resilient Fallback to Demo Mode ---
     if not _is_ready() or _is_invalid_sandbox(sandbox_id):
@@ -461,6 +578,7 @@ def generate_trailer():
         from videodb.editor import Timeline, Track, Clip, ImageAsset, AudioAsset, Fit
         
         conn = connect()
+        coll = conn.get_collection()
         
         try:
             _ensure_sandbox_ready(sandbox_id)
@@ -483,14 +601,11 @@ def generate_trailer():
         current_time = 0.0
 
         for zone in zones_visited:
-            zone_assets = assets.get(zone)
-            if not zone_assets:
-                continue
-
+            zone_assets = assets.get(zone) or {}
             img_id = zone_assets.get("image_id")
             aud_id = zone_assets.get("audio_id")
             aud_len = float(zone_assets.get("audio_length", 5.0))
-            
+
             if img_id and aud_id:
                 image_track.add_clip(current_time, Clip(asset=ImageAsset(id=img_id), duration=aud_len, fit=Fit.crop))
                 audio_track.add_clip(current_time, Clip(asset=AudioAsset(id=aud_id), duration=aud_len))

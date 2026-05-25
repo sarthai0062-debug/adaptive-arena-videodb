@@ -292,14 +292,25 @@ const Game = (() => {
 
     function showZoneToast(zoneName) {
         if (!zoneToast) return;
+        zoneToast.classList.remove('zone-gen');
         zoneToast.textContent = zoneName;
         zoneToast.classList.add('visible');
         if (typeof Sound !== 'undefined') Sound.playTransition();
 
-        // Remove after 2.5 seconds
         setTimeout(() => {
             zoneToast.classList.remove('visible');
         }, 2500);
+    }
+
+    function showZoneGenIndicator(zoneName) {
+        if (!zoneToast) return;
+        zoneToast.textContent = `✦ Generating ${zoneName}...`;
+        zoneToast.classList.add('visible', 'zone-gen');
+    }
+
+    function hideZoneGenIndicator() {
+        if (!zoneToast) return;
+        zoneToast.classList.remove('visible', 'zone-gen');
     }
 
     function resetHUD() {
@@ -740,7 +751,11 @@ const Game = (() => {
             const visitedArray = Array.from(zonesVisited);
             console.log('[Game] Requesting highlights video composition for zones:', visitedArray);
 
-            const res = await API.generateTrailer(visitedArray, userTheme);
+            const updateLoader = (msg) => {
+                const txt = document.querySelector('#trailer-loader .trailer-loading-text');
+                if (txt) txt.textContent = msg;
+            };
+            const res = await API.generateTrailer(visitedArray, userTheme, updateLoader);
             loader.classList.add('hidden');
 
             if (res && res.success && res.player_url) {
@@ -762,8 +777,8 @@ const Game = (() => {
         init,
         startGame,
         restartGame,
-        showPerformancePopup,
-        hidePerformancePopup,
+        showZoneGenIndicator,
+        hideZoneGenIndicator,
         get activeZone() { return activeZone; },
         get cameraX() { return cameraX; }
     };

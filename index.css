@@ -245,6 +245,23 @@ html, body {
   transform: translateX(-50%) translateY(0);
 }
 
+/* Subtle non-blocking FLUX generation indicator (replaces full-screen modal) */
+.zone-toast.zone-gen {
+  top: auto;
+  bottom: 72px;
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: var(--accent-magenta);
+  text-shadow: 0 0 12px rgba(255, 0, 170, 0.5);
+  border-color: rgba(255, 0, 170, 0.25);
+  animation: zoneGenPulse 2s ease-in-out infinite;
+}
+
+@keyframes zoneGenPulse {
+  0%, 100% { opacity: 0.85; }
+  50% { opacity: 1; }
+}
+
 /* === Start Screen === */
 .start-screen {
   position: absolute;
